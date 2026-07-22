@@ -1,0 +1,20 @@
+# Pinned for determinism. This is a full license audit of THIS package's own
+# declared dependencies plus their real transitive closure (verified by
+# reading each distribution's own LICENSE/METADATA text, not registry
+# metadata alone) — protobuf and grpcio are supplied by the Axiom runtime
+# itself and are not pinned here (both permissive: protobuf BSD-3-Clause,
+# grpcio Apache-2.0):
+#   onnx              Apache-2.0  (structural model parsing/validation;
+#                      onnx.checker)
+#   onnxruntime       MIT         (the reference ONNX inference engine)
+#   numpy             BSD-3-Clause (tensor <-> flat-list marshaling)
+#   protobuf          BSD-3-Clause (pulled by both onnx and onnxruntime;
+#                      not separately pinned here — see above)
+#   flatbuffers       Apache-2.0  (pulled by onnxruntime)
+#   packaging         Apache-2.0 OR BSD-2-Clause (pulled by onnxruntime)
+#   typing_extensions PSF-2.0     (pulled by onnx)
+#   ml_dtypes         Apache-2.0  (pulled by onnx)
+# No copyleft anywhere in the tree.
+onnx==1.22.0
+onnxruntime==1.27.0
+numpy==2.5.1

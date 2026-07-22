@@ -1,0 +1,304 @@
+// This file defines the data contracts (messages) for your Axiom package.
+// Every node's --input and --output refers to a message defined here.
+//
+// Run `axiom create message <Name>` to scaffold a new message below.
+// Run `axiom generate` to compile these definitions into language bindings in gen/.
+//
+// DOCUMENTATION
+//   Comments written directly above a message or field declaration are extracted
+//   automatically at publish time and shown in the Axiom registry as documentation.
+//   Write your descriptions there — no separate doc files needed.
+//
+//   Leading comment  (no blank line before the declaration) → registry description ✓
+//   Detached comment (blank line before the declaration)    → ignored by registry  ✗
+//
+// This file is yours to edit. Axiom only appends new message blocks — it never
+// overwrites or removes content you have written.
+//
+// Data contracts for christiangeorgelucas/onnx-tools.
+//
+// Deterministic ONNX model INSPECTION (structure, metadata, schema) and
+// INFERENCE (run the model on caller-supplied tensors), wrapping onnx
+// (Apache-2.0, structural parsing/validation) and onnxruntime (MIT, the
+// reference ONNX inference engine). The MODEL and every INPUT TENSOR are
+// supplied by the caller — nothing is ever downloaded or fetched by URL, and
+// no node makes a network call. Inference is deterministic: CPU-only
+// (`CPUExecutionProvider` only), single-threaded (intra/inter-op = 1,
+// sequential execution mode), no custom-op libraries are ever registered
+// (any node whose graph references a non-standard opset domain is rejected
+// outright, never silently run), and onnxruntime's own telemetry is
+// disabled at import.
+//
+// SIZE. The Axiom node transport caps a single message around ~4 MiB, so
+// every node here caps the incoming serialized ONNX model at 3 MiB
+// (3,145,728 bytes) — checked on the raw bytes before any parse begins — and
+// returns a structured MODEL_TOO_LARGE error above that, rather than
+// crashing or hanging. This comfortably covers classical-ML exports
+// (scikit-learn via skl2onnx), small MLPs/CNNs, and quantized/pruned nets;
+// it will reject full-size vision/language backbones — that is a deliberate,
+// documented platform-transport limit, not a bug.
+//
+// ERRORS. Malformed/oversized/unparseable input never crashes a node; every
+// output message carries an `error` field (unset on success). ValidateModel
+// is the one exception in spirit only: a structurally-invalid ONNX model is
+// its intended, correctly-handled *result* (`valid=false` + `errors`), not a
+// failure of the node itself — `error` on ValidateModel's output is reserved
+// for the node's own processing failures (e.g. MODEL_TOO_LARGE), never for
+// "the model was invalid," which is what the node exists to report.
+
+syntax = "proto3";
+
+package christiangeorgelucas.onnx_tools;
+
+option go_package = ".;gen";
+
+// A structured, deterministic failure. Unset (code == "") on success.
+message Error {
+  // Stable machine-readable code, one of:
+  //   MODEL_TOO_LARGE — the serialized ONNX model exceeds the 3 MiB cap.
+  //   MALFORMED_MODEL — the model bytes are not a well-formed ONNX
+  //                     ModelProto (fails protobuf parse or onnx.checker).
+  //   UNSUPPORTED_OP  — the graph references an operator outside the
+  //                     standard "", "ai.onnx", or "ai.onnx.ml" opset
+  //                     domains. Rejected before any inference is attempted,
+  //                     since running an unknown-domain op would require
+  //                     loading a caller-influenced custom-op library —
+  //                     never done here.
+  //   TENSOR_MISMATCH — a supplied input tensor's name, dtype, shape, or
+  //                     element count does not match what the graph (or the
+  //                     tensor's own declared shape) requires.
+  //   INVALID_INPUT   — a tensor's data is malformed (e.g. an out-of-range
+  //                     integer value for its declared dtype, or a
+  //                     flat-data length inconsistent with its shape).
+  //   INVALID_ARGUMENT — a non-tensor argument is wrong (e.g. a negative
+  //                     `k`, an `output_name` naming no such output).
+  //   INTERNAL        — this package itself faulted; the caller's input
+  //                     was not conclusively at fault.
+  string code = 1;
+  // Human-readable detail. Always set when code is set.
+  string message = 2;
+}
+
+// The canonical envelope every node in this package consumes: the raw
+// serialized ONNX model, supplied by the caller (base64 over JSON/HTTP —
+// protobuf `bytes` fields are base64-encoded automatically by the proto3
+// JSON mapping). Never fetched by URL, never downloaded — the model is
+// always a direct caller input.
+message OnnxModel {
+  bytes model_data = 1;
+}
+
+// One named tensor: input to RunInference/RunInferenceTopK, or output from
+// RunInference. `dtype` selects which of the typed data fields below is
+// populated (exactly one, matching the tensor's declared element type):
+// "float16"/"float32"/"float64" -> float_data (widened to double for JSON);
+// "int8"/"int16"/"int32"/"int64"/"uint8"/"uint16"/"uint32"/"uint64" ->
+// int_data (widened to int64); "bool" -> bool_data; "string" -> string_data.
+// `shape` gives the tensor's dimensions in row-major order; the product of
+// `shape` must equal the populated data field's length (a scalar tensor has
+// an empty `shape` and exactly one data element).
+message Tensor {
+  string name = 1;
+  string dtype = 2;
+  repeated int64 shape = 3;
+  repeated double float_data = 4;
+  repeated int64 int_data = 5;
+  repeated bool bool_data = 6;
+  repeated string string_data = 7;
+}
+
+// RunInference's request: a model plus every named input tensor its graph
+// requires.
+message InferenceRequest {
+  OnnxModel model = 1;
+  repeated Tensor inputs = 2;
+}
+
+// RunInference's result: every named output tensor the graph produced, in
+// the graph's declared output order.
+message InferenceResponse {
+  repeated Tensor outputs = 1;
+  Error error = 2;
+}
+
+// RunInferenceTopK's request: run inference, then reduce ONE output tensor
+// (a 1-D or [1, N] vector of scores/logits — the common classifier-head
+// shape) to its top `k` indices and scores. `output_name` selects which
+// graph output to reduce; empty means "the graph's first declared output."
+message TopKInferenceRequest {
+  OnnxModel model = 1;
+  repeated Tensor inputs = 2;
+  int32 k = 3;
+  string output_name = 4;
+}
+
+// The top-k class indices (descending by score) and their scores, from the
+// selected output tensor.
+message TopKResult {
+  string output_name = 1;
+  repeated int32 indices = 2;
+  repeated double scores = 3;
+  Error error = 4;
+}
+
+// One tensor's declared shape/type contract — a graph input or output.
+// `dims` mirrors ONNX's own mixed static/dynamic-axis model: each entry is
+// either a non-negative integer (as a string, a fixed dimension), a
+// symbolic name (a dynamic axis, e.g. "batch_size"), or "?" (a dimension
+// with neither a fixed value nor a symbolic name — fully unconstrained).
+message TensorSpec {
+  string name = 1;
+  string elem_type = 2;
+  repeated string dims = 3;
+}
+
+// ListModelInputs / ListModelOutputs' result: the graph's declared value_info
+// entries for whichever side was asked for.
+message TensorSpecList {
+  repeated TensorSpec specs = 1;
+  Error error = 2;
+}
+
+// One opset import: a domain ("" is the default ai.onnx domain) and the
+// version of that domain's operator set the model was authored against.
+message OpsetImport {
+  string domain = 1;
+  int64 version = 2;
+}
+
+// GetModelMetadata's result: the model-level fields ONNX defines outside the
+// graph itself.
+message ModelMetadata {
+  string producer_name = 1;
+  string producer_version = 2;
+  int64 ir_version = 3;
+  string domain = 4;
+  string doc_string = 5;
+  string graph_name = 6;
+  int64 model_version = 7;
+  repeated OpsetImport opset_imports = 8;
+  Error error = 9;
+}
+
+// One operator type and how many graph nodes use it.
+message OperatorCount {
+  string op_type = 1;
+  int32 count = 2;
+}
+
+// ListOperators' result: the graph's operator-type inventory — "what does
+// this model do" at a glance.
+message OperatorInventory {
+  repeated OperatorCount operators = 1;
+  int32 total_nodes = 2;
+  Error error = 3;
+}
+
+// One initializer (a learned weight tensor baked into the graph): its name,
+// declared element type, and shape. Never the raw values — those can be
+// large and are not the point of an inventory listing.
+message InitializerSpec {
+  string name = 1;
+  string elem_type = 2;
+  repeated int64 shape = 3;
+  int64 element_count = 4;
+}
+
+// ListInitializers' result. Listed entries are capped (see `truncated`) for
+// response-size safety; `total_parameters` and `total_initializer_count`
+// are always computed over the FULL initializer set regardless of the cap.
+message InitializerInventory {
+  repeated InitializerSpec initializers = 1;
+  int64 total_parameters = 2;
+  int64 total_initializer_count = 3;
+  bool truncated = 4;
+  Error error = 5;
+}
+
+// GetModelSize's result: aggregate size/parameter statistics without
+// enumerating every initializer.
+message ModelSizeInfo {
+  int64 total_parameters = 1;
+  int64 model_size_bytes = 2;
+  int64 initializer_count = 3;
+  Error error = 4;
+}
+
+// ValidateModel's result. `valid=false` + populated `errors` IS the node
+// doing its job correctly on a malformed model — see the file-level comment
+// on `error` vs. this. `errors` holds one human-readable message per
+// distinct problem onnx.checker (or protobuf parsing) reported.
+message ValidationResult {
+  bool valid = 1;
+  repeated string errors = 2;
+  Error error = 3;
+}
+
+// GetGraphStructure's request. `max_nodes` bounds how many graph nodes are
+// returned (protects the response against the transport cap on models with
+// very many small nodes); 0 means "use the default of 200." Any value is
+// itself hard-capped at 2000 server-side.
+message GraphStructureRequest {
+  OnnxModel model = 1;
+  int32 max_nodes = 2;
+}
+
+// One node in the computation graph: its operator type and the named edges
+// (tensor names) flowing in and out of it.
+message GraphNode {
+  string name = 1;
+  string op_type = 2;
+  repeated string inputs = 3;
+  repeated string outputs = 4;
+  string domain = 5;
+}
+
+// GetGraphStructure's result: the graph as a DAG of named-edge nodes, capped
+// at `max_nodes` entries (see `truncated`/`total_node_count`).
+message GraphStructure {
+  repeated GraphNode nodes = 1;
+  repeated string graph_inputs = 2;
+  repeated string graph_outputs = 3;
+  bool truncated = 4;
+  int32 total_node_count = 5;
+  Error error = 6;
+}
+
+// GetOpsetVersion's result: the model's default-domain ("ai.onnx") opset
+// version, plus every opset import (including any non-default domains).
+message OpsetInfo {
+  int64 opset_version = 1;
+  repeated OpsetImport all_opsets = 2;
+  Error error = 3;
+}
+
+// GetSchemaContract's result: the input/output shape contract an agent
+// needs to know how to call the model, in one call — the union of
+// ListModelInputs + ListModelOutputs + the default-domain opset version.
+message SchemaContract {
+  repeated TensorSpec inputs = 1;
+  repeated TensorSpec outputs = 2;
+  int64 opset_version = 3;
+  string graph_name = 4;
+  Error error = 5;
+}
+
+// CheckOpsetCompatibility's request: a model and the opset version a caller
+// wants to confirm it runs under.
+message OpsetCompatRequest {
+  OnnxModel model = 1;
+  int64 target_opset = 2;
+}
+
+// CheckOpsetCompatibility's result. A model is "compatible" with
+// `target_opset` when its own default-domain opset version is
+// less-than-or-equal to it (ONNX opsets are backward-compatible within a
+// domain: a model authored at an older opset runs fine under a runtime that
+// supports a newer one, but not vice versa).
+message OpsetCompatResult {
+  bool compatible = 1;
+  int64 model_opset = 2;
+  int64 target_opset = 3;
+  string note = 4;
+  Error error = 5;
+}

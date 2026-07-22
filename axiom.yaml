@@ -1,0 +1,143 @@
+name: christiangeorgelucas/onnx-tools
+version: 0.1.0
+language: python
+description: >-
+  Deterministic ONNX model inspection and inference for AI agents: run a
+  caller-supplied ONNX model (base64, capped at 3 MiB for the ~4 MiB Axiom
+  transport limit) on caller-supplied input tensors and get back real output
+  tensors, or inspect its structure — inputs/outputs schema, metadata, opset,
+  operator inventory, initializer/parameter counts, the computation graph, and
+  well-formedness — without shipping a whole ML stack. Wraps onnx (Apache-2.0,
+  structural parsing/validation) and onnxruntime (MIT, the reference ONNX
+  inference engine). Inference is CPU-only, single-threaded, and
+  telemetry-disabled for determinism; the model and every tensor are direct
+  inputs — nothing is ever fetched by URL or downloaded, and a graph
+  referencing a non-standard custom-op domain is rejected outright rather than
+  run. Malformed/oversized input returns a structured error, never a crash.
+author: Christian George Lucas
+license: MIT
+nodes:
+    - name: RunInference
+      description: >-
+        Run inference: load a caller-supplied ONNX model and execute it on
+        caller-supplied named input tensors, returning every named output
+        tensor the graph produces. CPU-only (CPUExecutionProvider),
+        single-threaded (intra/inter-op = 1, sequential execution), so a
+        fixed model + input always produces byte-identical output. The model
+        is capped at 3 MiB (MODEL_TOO_LARGE above that); a graph referencing
+        any operator outside the standard "", "ai.onnx", or "ai.onnx.ml"
+        domains is rejected as UNSUPPORTED_OP before any inference runs,
+        since executing it would require loading a caller-influenced
+        custom-op library. A missing/mismatched/malformed input tensor is
+        TENSOR_MISMATCH or INVALID_INPUT, never a crash.
+      input: InferenceRequest
+      output: InferenceResponse
+    - name: RunInferenceTopK
+      description: >-
+        Convenience wrapper over RunInference for classifier models: run
+        inference the same way, then reduce one selected output tensor (a
+        1-D or [1, N] vector of scores/logits — pick it by output_name, or
+        the graph's first declared output when output_name is empty) to its
+        top k indices and scores, sorted by score descending. Same
+        determinism and size/domain guards as RunInference; an out-of-range
+        k or an output_name naming no such output is INVALID_ARGUMENT.
+      input: TopKInferenceRequest
+      output: TopKResult
+    - name: ListModelInputs
+      description: >-
+        List a model's graph-level inputs (initializers with a matching
+        value_info are excluded — this is what a caller must actually
+        supply): each entry's name, ONNX element type (e.g. "FLOAT",
+        "INT64"), and dims, where a dynamic axis appears as its symbolic
+        name (e.g. "batch_size") or "?" when it has neither a fixed value
+        nor a name.
+      input: OnnxModel
+      output: TensorSpecList
+    - name: ListModelOutputs
+      description: >-
+        List a model's graph-level outputs: each entry's name, ONNX element
+        type, and dims (dynamic axes as their symbolic name or "?"), in the
+        graph's declared output order — the order RunInference returns
+        tensors in.
+      input: OnnxModel
+      output: TensorSpecList
+    - name: GetModelMetadata
+      description: >-
+        Read a model's metadata fields: producer_name, producer_version,
+        ir_version (the ONNX IR format version), domain, doc_string,
+        graph_name, model_version, and every opset import (domain + version
+        pair) the model declares.
+      input: OnnxModel
+      output: ModelMetadata
+    - name: ListOperators
+      description: >-
+        Inventory which operator types a model's graph uses and how many
+        graph nodes use each one, plus the total node count — the "what does
+        this model actually do" summary (e.g. a model built from Conv/Relu/
+        MaxPool/Gemm is a CNN classifier; one built from MatMul/Add/Tanh is
+        an MLP).
+      input: OnnxModel
+      output: OperatorInventory
+    - name: ListInitializers
+      description: >-
+        Inventory the model's initializers (baked-in learned weight
+        tensors): each one's name, ONNX element type, shape, and element
+        count — never the raw values. Listed entries are capped at 500 for
+        response-size safety (truncated=true when more exist);
+        total_parameters and total_initializer_count are always computed
+        over the model's FULL initializer set regardless of the cap.
+      input: OnnxModel
+      output: InitializerInventory
+    - name: GetModelSize
+      description: >-
+        Compute aggregate size statistics without enumerating every
+        initializer: total_parameters (the sum of every initializer's
+        element count — the model's total parameter count), the serialized
+        model's byte size, and the initializer count.
+      input: OnnxModel
+      output: ModelSizeInfo
+    - name: ValidateModel
+      description: >-
+        Check whether a base64 blob is a well-formed ONNX model, via
+        onnx.checker after a protobuf parse. valid=false with one message
+        per distinct problem in errors is this node doing its job correctly
+        on a bad model, not a failure — error is reserved for this node's
+        own processing failures (e.g. MODEL_TOO_LARGE), never for "the model
+        was invalid."
+      input: OnnxModel
+      output: ValidationResult
+    - name: GetGraphStructure
+      description: >-
+        Extract the computation graph as a DAG: each node's name, operator
+        type, and the named tensor edges flowing in and out of it, plus the
+        graph's own overall input/output tensor names. Capped at max_nodes
+        entries (0 means the default of 200; any value is hard-capped at
+        2000) with truncated + total_node_count reporting when the graph is
+        larger than what was returned.
+      input: GraphStructureRequest
+      output: GraphStructure
+    - name: GetOpsetVersion
+      description: >-
+        Detect a model's opset version: the default ("ai.onnx") domain's
+        opset_version, plus every opset import (including any non-default
+        domains) the model declares.
+      input: OnnxModel
+      output: OpsetInfo
+    - name: GetSchemaContract
+      description: >-
+        Get the model's full input/output shape contract in one call — the
+        union of ListModelInputs + ListModelOutputs + the default-domain
+        opset version and graph name — so a calling agent knows exactly how
+        to build a RunInference request without three separate calls.
+      input: OnnxModel
+      output: SchemaContract
+    - name: CheckOpsetCompatibility
+      description: >-
+        Check whether a model is compatible with a given target opset
+        version: compatible when the model's own default-domain opset
+        version is less than or equal to target_opset (ONNX opsets are
+        backward-compatible within a domain — a model authored at an older
+        opset runs fine under a runtime supporting a newer one, never the
+        reverse).
+      input: OpsetCompatRequest
+      output: OpsetCompatResult
