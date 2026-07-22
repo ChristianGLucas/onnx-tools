@@ -71,11 +71,12 @@ nodes:
       output: ModelMetadata
     - name: ListOperators
       description: >-
-        Inventory which operator types a model's graph uses and how many
-        graph nodes use each one, plus the total node count — the "what does
-        this model actually do" summary (e.g. a model built from Conv/Relu/
-        MaxPool/Gemm is a CNN classifier; one built from MatMul/Add/Tanh is
-        an MLP).
+        Inventory which operator types a model uses and how many nodes use
+        each one, plus the total node count — the "what does this model
+        actually do" summary (e.g. a model built from Conv/Relu/MaxPool/Gemm
+        is a CNN classifier; one built from MatMul/Add/Tanh is an MLP).
+        Counts every node reachable in the model, including ones nested
+        inside If/Loop/Scan subgraphs, not just the top-level graph.
       input: OnnxModel
       output: OperatorInventory
     - name: ListInitializers
@@ -108,12 +109,16 @@ nodes:
       output: ValidationResult
     - name: GetGraphStructure
       description: >-
-        Extract the computation graph as a DAG: each node's name, operator
-        type, and the named tensor edges flowing in and out of it, plus the
-        graph's own overall input/output tensor names. Capped at max_nodes
-        entries (0 means the default of 200; any value is hard-capped at
-        2000) with truncated + total_node_count reporting when the graph is
-        larger than what was returned.
+        Extract the TOP-LEVEL computation graph as a DAG: each node's name,
+        operator type, and the named tensor edges flowing in and out of it,
+        plus the graph's own overall input/output tensor names. Capped at
+        max_nodes entries (0 means the default of 200; any value is
+        hard-capped at 2000) with truncated + total_node_count reporting
+        when the graph is larger than what was returned. Nodes nested
+        inside a control-flow op's subgraph (If/Loop/Scan) are NOT
+        expanded here — each such op appears as a single node in this DAG;
+        use ListOperators for a full reachable-node inventory that does
+        include subgraph contents.
       input: GraphStructureRequest
       output: GraphStructure
     - name: GetOpsetVersion

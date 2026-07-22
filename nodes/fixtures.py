@@ -107,6 +107,68 @@ def build_custom_domain_model() -> bytes:
     return model.SerializeToString()
 
 
+def build_nested_custom_domain_model() -> bytes:
+    """A model whose TOP-LEVEL graph uses only standard ops (an `If`), but
+    whose then_branch SUBGRAPH contains a node in a non-standard opset
+    domain. Regression fixture for the review finding that
+    check_standard_domains_only originally only scanned model.graph.node
+    and silently missed nodes nested inside If/Loop/Scan subgraphs — a real
+    bypass of the "never execute a custom-op" guarantee. The graph:
+    If(cond) { then: Y = MyEvilOp(X) [domain=evil.domain] } else { Y = X }."""
+    x = helper.make_tensor_value_info("X", TensorProto.FLOAT, [3])
+    cond = helper.make_tensor_value_info("cond", TensorProto.BOOL, [])
+    y = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [3])
+
+    y_then = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [3])
+    then_node = helper.make_node(
+        "MyEvilOp", inputs=["X"], outputs=["Y"], name="evil1", domain="evil.domain"
+    )
+    then_graph = helper.make_graph([then_node], "then", [], [y_then])
+
+    y_else = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [3])
+    else_node = helper.make_node("Identity", inputs=["X"], outputs=["Y"], name="id_else")
+    else_graph = helper.make_graph([else_node], "else", [], [y_else])
+
+    if_node = helper.make_node(
+        "If", inputs=["cond"], outputs=["Y"], name="if1", then_branch=then_graph, else_branch=else_graph
+    )
+    graph = helper.make_graph([if_node], "nested_graph", [cond, x], [y])
+    model = helper.make_model(
+        graph,
+        producer_name="onnx-tools-tests",
+        opset_imports=[helper.make_opsetid("", 17), helper.make_opsetid("evil.domain", 1)],
+    )
+    model.ir_version = 8
+    return model.SerializeToString()
+
+
+def build_nested_standard_ops_model() -> bytes:
+    """Same If/then/else shape as build_nested_custom_domain_model, but both
+    branches use only standard ops (Identity) — used to prove the recursive
+    node-walk correctly counts nested nodes (ListOperators) without
+    over-rejecting a legitimate control-flow model."""
+    x = helper.make_tensor_value_info("X", TensorProto.FLOAT, [3])
+    cond = helper.make_tensor_value_info("cond", TensorProto.BOOL, [])
+    y = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [3])
+
+    y_then = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [3])
+    then_node = helper.make_node("Identity", inputs=["X"], outputs=["Y"], name="id_then")
+    then_graph = helper.make_graph([then_node], "then", [], [y_then])
+
+    y_else = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [3])
+    else_node = helper.make_node("Neg", inputs=["X"], outputs=["Y"], name="neg_else")
+    else_graph = helper.make_graph([else_node], "else", [], [y_else])
+
+    if_node = helper.make_node(
+        "If", inputs=["cond"], outputs=["Y"], name="if1", then_branch=then_graph, else_branch=else_graph
+    )
+    graph = helper.make_graph([if_node], "nested_ok_graph", [cond, x], [y])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 8
+    onnx.checker.check_model(model)
+    return model.SerializeToString()
+
+
 def build_structurally_invalid_model() -> bytes:
     """A model that PARSES fine (valid protobuf bytes) but is structurally
     invalid ONNX: its one node references an input tensor ("NotDeclared")

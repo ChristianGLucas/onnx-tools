@@ -15,7 +15,13 @@ from gen.messages_pb2 import (
     TopKInferenceRequest,
 )
 from nodes.check_opset_compatibility import check_opset_compatibility
-from nodes.fixtures import build_add_model, build_custom_domain_model, build_tiny_mlp_model
+from nodes.fixtures import (
+    build_add_model,
+    build_custom_domain_model,
+    build_nested_custom_domain_model,
+    build_nested_standard_ops_model,
+    build_tiny_mlp_model,
+)
 from nodes.get_graph_structure import get_graph_structure
 from nodes.get_model_metadata import get_model_metadata
 from nodes.get_model_size import get_model_size
@@ -93,6 +99,74 @@ def test_run_inference_top_k_never_executes_a_custom_domain_op():
         k=1,
     )
     assert_error(run_inference_top_k(ax(), req), "UNSUPPORTED_OP")
+
+
+def test_run_inference_rejects_custom_domain_op_nested_inside_if_subgraph():
+    """REGRESSION (review finding): a non-standard-domain node hidden inside
+    an If/Loop/Scan subgraph must be rejected exactly like a top-level one —
+    the domain guard has to walk the WHOLE reachable graph, not just
+    model.graph.node, or a caller can smuggle a custom op past it."""
+    model = build_nested_custom_domain_model()
+    req = InferenceRequest(
+        model=OnnxModel(model_data=model),
+        inputs=[
+            Tensor(name="cond", dtype="bool", shape=[], bool_data=[True]),
+            Tensor(name="X", dtype="float32", shape=[3], float_data=[1.0, 2.0, 3.0]),
+        ],
+    )
+    assert_error(run_inference(ax(), req), "UNSUPPORTED_OP")
+
+
+def test_run_inference_top_k_rejects_custom_domain_op_nested_inside_if_subgraph():
+    model = build_nested_custom_domain_model()
+    req = TopKInferenceRequest(
+        model=OnnxModel(model_data=model),
+        inputs=[
+            Tensor(name="cond", dtype="bool", shape=[], bool_data=[True]),
+            Tensor(name="X", dtype="float32", shape=[3], float_data=[1.0, 2.0, 3.0]),
+        ],
+        k=1,
+    )
+    assert_error(run_inference_top_k(ax(), req), "UNSUPPORTED_OP")
+
+
+def test_run_inference_allows_legitimate_nested_control_flow():
+    """The fix must not over-reject: an If model whose subgraphs use only
+    standard ops still runs normally, on both branches."""
+    model = build_nested_standard_ops_model()
+    req_then = InferenceRequest(
+        model=OnnxModel(model_data=model),
+        inputs=[
+            Tensor(name="cond", dtype="bool", shape=[], bool_data=[True]),
+            Tensor(name="X", dtype="float32", shape=[3], float_data=[1.0, 2.0, 3.0]),
+        ],
+    )
+    result_then = run_inference(ax(), req_then)
+    assert not result_then.error.code, result_then.error.message
+    assert list(result_then.outputs[0].float_data) == [1.0, 2.0, 3.0]  # then branch: Identity
+
+    req_else = InferenceRequest(
+        model=OnnxModel(model_data=model),
+        inputs=[
+            Tensor(name="cond", dtype="bool", shape=[], bool_data=[False]),
+            Tensor(name="X", dtype="float32", shape=[3], float_data=[1.0, 2.0, 3.0]),
+        ],
+    )
+    result_else = run_inference(ax(), req_else)
+    assert not result_else.error.code, result_else.error.message
+    assert list(result_else.outputs[0].float_data) == [-1.0, -2.0, -3.0]  # else branch: Neg
+
+
+def test_list_operators_counts_nodes_nested_inside_if_subgraph():
+    """REGRESSION (review finding): ListOperators must inventory nodes
+    inside If/Loop/Scan subgraphs too — the top-level graph here has ONE
+    node (the If itself), but the true reachable node count is 3 (If +
+    Identity + Neg across both branches)."""
+    result = list_operators(ax(), OnnxModel(model_data=build_nested_standard_ops_model()))
+    assert not result.error.code
+    assert result.total_nodes == 3
+    counts = {op.op_type: op.count for op in result.operators}
+    assert counts == {"If": 1, "Identity": 1, "Neg": 1}
 
 
 def test_ai_onnx_ml_domain_is_allowed_not_rejected():

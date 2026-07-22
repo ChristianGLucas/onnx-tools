@@ -155,8 +155,27 @@ def parse_model(model_data: bytes) -> onnx.ModelProto:
         raise OnnxToolsError("MALFORMED_MODEL", f"failed to parse ONNX model: {exc}") from exc
 
 
+def iter_all_nodes(graph: onnx.GraphProto):
+    """Yield every NodeProto in `graph`, recursively descending into every
+    subgraph reachable via a GRAPH- or GRAPHS-typed node attribute (If's
+    then_branch/else_branch, Loop's body, Scan's body, and any future
+    control-flow op with a nested graph). Security-critical: a node hidden
+    inside a subgraph is just as executable as a top-level one, so any code
+    that must see "every op this model could run" (the domain guard below,
+    and the operator inventory) has to walk this, not model.graph.node
+    alone — a flat scan silently misses nested ops entirely."""
+    for node in graph.node:
+        yield node
+        for attr in node.attribute:
+            if attr.type == onnx.AttributeProto.GRAPH:
+                yield from iter_all_nodes(attr.g)
+            elif attr.type == onnx.AttributeProto.GRAPHS:
+                for sub in attr.graphs:
+                    yield from iter_all_nodes(sub)
+
+
 def check_standard_domains_only(model: onnx.ModelProto) -> None:
-    for node in model.graph.node:
+    for node in iter_all_nodes(model.graph):
         if node.domain not in ALLOWED_DOMAINS:
             raise OnnxToolsError(
                 "UNSUPPORTED_OP",

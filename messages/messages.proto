@@ -253,8 +253,11 @@ message GraphNode {
   string domain = 5;
 }
 
-// GetGraphStructure's result: the graph as a DAG of named-edge nodes, capped
-// at `max_nodes` entries (see `truncated`/`total_node_count`).
+// GetGraphStructure's result: the TOP-LEVEL graph as a DAG of named-edge
+// nodes, capped at `max_nodes` entries (see `truncated`/`total_node_count`).
+// A control-flow node (If/Loop/Scan) appears as a single entry here — its
+// nested subgraph is not expanded; see ListOperators for a full inventory
+// that does include subgraph contents.
 message GraphStructure {
   repeated GraphNode nodes = 1;
   repeated string graph_inputs = 2;
