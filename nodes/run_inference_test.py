@@ -110,13 +110,6 @@ def test_empty_model_bytes():
     assert_error(result, "MALFORMED_MODEL")
 
 
-def test_oversized_model_is_model_too_large():
-    huge = b"\x00" * (3 * 1024 * 1024 + 1)
-    req = InferenceRequest(model=OnnxModel(model_data=huge), inputs=[])
-    result = run_inference(ax(), req)
-    assert_error(result, "MODEL_TOO_LARGE")
-
-
 def test_custom_domain_op_is_unsupported_op():
     model = build_custom_domain_model()
     req = InferenceRequest(

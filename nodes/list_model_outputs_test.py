@@ -25,9 +25,3 @@ def test_add_model_output_fixed_dim():
 def test_malformed_model_is_malformed_model_error():
     result = list_model_outputs(ax(), OnnxModel(model_data=b"garbage"))
     assert_error(result, "MALFORMED_MODEL")
-
-
-def test_oversized_model_is_model_too_large():
-    huge = b"\x00" * (3 * 1024 * 1024 + 1)
-    result = list_model_outputs(ax(), OnnxModel(model_data=huge))
-    assert_error(result, "MODEL_TOO_LARGE")

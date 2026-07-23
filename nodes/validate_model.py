@@ -3,7 +3,7 @@ import onnx.checker
 
 from gen.messages_pb2 import OnnxModel, ValidationResult
 from gen.axiom_context import AxiomContext
-from nodes._shared import OnnxToolsError, check_model_size, internal_error, to_error
+from nodes._shared import OnnxToolsError, check_model_present, internal_error, to_error
 
 
 def validate_model(ax: AxiomContext, input: OnnxModel) -> ValidationResult:
@@ -11,10 +11,10 @@ def validate_model(ax: AxiomContext, input: OnnxModel) -> ValidationResult:
     onnx.checker after a protobuf parse. valid=false with one message per
     distinct problem in errors is this node doing its job correctly on a
     bad model — error is reserved for this node's own processing failures
-    (e.g. MODEL_TOO_LARGE), never for "the model was invalid."
+    (e.g. empty model_data), never for "the model was invalid."
     """
     try:
-        check_model_size(input.model_data)
+        check_model_present(input.model_data)
     except OnnxToolsError as exc:
         ax.log.info("validate_model rejected input", code=exc.code)
         return ValidationResult(error=to_error(exc))

@@ -29,22 +29,15 @@
 // outright, never silently run), and onnxruntime's own telemetry is
 // disabled at import.
 //
-// SIZE. The Axiom node transport caps a single message around ~4 MiB, so
-// every node here caps the incoming serialized ONNX model at 3 MiB
-// (3,145,728 bytes) — checked on the raw bytes before any parse begins — and
-// returns a structured MODEL_TOO_LARGE error above that, rather than
-// crashing or hanging. This comfortably covers classical-ML exports
-// (scikit-learn via skl2onnx), small MLPs/CNNs, and quantized/pruned nets;
-// it will reject full-size vision/language backbones — that is a deliberate,
-// documented platform-transport limit, not a bug.
-//
-// ERRORS. Malformed/oversized/unparseable input never crashes a node; every
-// output message carries an `error` field (unset on success). ValidateModel
-// is the one exception in spirit only: a structurally-invalid ONNX model is
-// its intended, correctly-handled *result* (`valid=false` + `errors`), not a
-// failure of the node itself — `error` on ValidateModel's output is reserved
-// for the node's own processing failures (e.g. MODEL_TOO_LARGE), never for
-// "the model was invalid," which is what the node exists to report.
+// ERRORS. Malformed/unparseable input never crashes a node; every output
+// message carries an `error` field (unset on success). Size/memory/DoS
+// limits are the Axiom platform's job, not this package's — a node is a
+// pure input->output function. ValidateModel is the one exception in spirit
+// only: a structurally-invalid ONNX model is its intended, correctly-handled
+// *result* (`valid=false` + `errors`), not a failure of the node itself —
+// `error` on ValidateModel's output is reserved for the node's own
+// processing failures (e.g. empty model_data), never for "the model was
+// invalid," which is what the node exists to report.
 
 syntax = "proto3";
 
@@ -55,7 +48,6 @@ option go_package = ".;gen";
 // A structured, deterministic failure. Unset (code == "") on success.
 message Error {
   // Stable machine-readable code, one of:
-  //   MODEL_TOO_LARGE — the serialized ONNX model exceeds the 3 MiB cap.
   //   MALFORMED_MODEL — the model bytes are not a well-formed ONNX
   //                     ModelProto (fails protobuf parse or onnx.checker).
   //   UNSUPPORTED_OP  — the graph references an operator outside the
@@ -204,15 +196,13 @@ message InitializerSpec {
   int64 element_count = 4;
 }
 
-// ListInitializers' result. Listed entries are capped (see `truncated`) for
-// response-size safety; `total_parameters` and `total_initializer_count`
-// are always computed over the FULL initializer set regardless of the cap.
+// ListInitializers' result: every initializer, plus `total_parameters` and
+// `total_initializer_count` over the full set.
 message InitializerInventory {
   repeated InitializerSpec initializers = 1;
   int64 total_parameters = 2;
   int64 total_initializer_count = 3;
-  bool truncated = 4;
-  Error error = 5;
+  Error error = 4;
 }
 
 // GetModelSize's result: aggregate size/parameter statistics without
@@ -234,13 +224,9 @@ message ValidationResult {
   Error error = 3;
 }
 
-// GetGraphStructure's request. `max_nodes` bounds how many graph nodes are
-// returned (protects the response against the transport cap on models with
-// very many small nodes); 0 means "use the default of 200." Any value is
-// itself hard-capped at 2000 server-side.
+// GetGraphStructure's request.
 message GraphStructureRequest {
   OnnxModel model = 1;
-  int32 max_nodes = 2;
 }
 
 // One node in the computation graph: its operator type and the named edges
@@ -254,17 +240,14 @@ message GraphNode {
 }
 
 // GetGraphStructure's result: the TOP-LEVEL graph as a DAG of named-edge
-// nodes, capped at `max_nodes` entries (see `truncated`/`total_node_count`).
-// A control-flow node (If/Loop/Scan) appears as a single entry here — its
-// nested subgraph is not expanded; see ListOperators for a full inventory
-// that does include subgraph contents.
+// nodes. A control-flow node (If/Loop/Scan) appears as a single entry here
+// — its nested subgraph is not expanded; see ListOperators for a full
+// inventory that does include subgraph contents.
 message GraphStructure {
   repeated GraphNode nodes = 1;
   repeated string graph_inputs = 2;
   repeated string graph_outputs = 3;
-  bool truncated = 4;
-  int32 total_node_count = 5;
-  Error error = 6;
+  Error error = 4;
 }
 
 // GetOpsetVersion's result: the model's default-domain ("ai.onnx") opset

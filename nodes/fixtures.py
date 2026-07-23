@@ -204,25 +204,6 @@ def build_model_with_initializer_as_input() -> bytes:
     return model.SerializeToString()
 
 
-def build_chain_model(n: int) -> bytes:
-    """n sequential Identity nodes, X -> t0 -> t1 -> ... -> Y. Used to test
-    GetGraphStructure's max_nodes cap/truncation on a graph with a known,
-    exact node count."""
-    x = helper.make_tensor_value_info("X", TensorProto.FLOAT, [1])
-    y = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1])
-    nodes = []
-    prev = "X"
-    for i in range(n):
-        out_name = "Y" if i == n - 1 else f"t{i}"
-        nodes.append(helper.make_node("Identity", inputs=[prev], outputs=[out_name], name=f"id{i}"))
-        prev = out_name
-    graph = helper.make_graph(nodes, "chain_graph", [x], [y])
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
-    model.ir_version = 8
-    onnx.checker.check_model(model)
-    return model.SerializeToString()
-
-
 def build_int_classifier_model() -> bytes:
     """ArgMax-free int64-output identity-ish model: Y = X (a Cast node),
     used to exercise int64 tensor round-tripping distinct from the float

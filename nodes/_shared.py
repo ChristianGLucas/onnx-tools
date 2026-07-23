@@ -7,9 +7,10 @@ inference, deterministic session settings) and the Tensor<->numpy convention
 are defined exactly once, not once per node.
 
 SECURITY / DETERMINISM, read this before touching create_session/run_session:
-  - Every model is size-checked FIRST (MAX_MODEL_BYTES), before any parse or
-    session-creation work — this bounds memory/CPU cost on the raw input
-    before we ever touch it.
+  - Every model is decoded via parse_model, which rejects empty input
+    (MALFORMED_MODEL) and any bytes that don't parse as an ONNX ModelProto —
+    domain correctness, not a size/cost bound. Size/memory/DoS limits are the
+    Axiom platform's job, not this package's — see ADR "node = pure function".
   - onnxruntime telemetry is disabled at import (disable_telemetry_events()).
   - Every inference session is CPU-only (providers=["CPUExecutionProvider"]
     explicitly — never left to onnxruntime's own provider auto-selection),
@@ -23,8 +24,6 @@ SECURITY / DETERMINISM, read this before touching create_session/run_session:
     a non-standard-domain op would otherwise either fail confusingly deep
     inside onnxruntime or (on a runtime that happened to have one
     registered) execute code this package never vetted. Reject, don't hope.
-  - Tensor element counts are bounded (MAX_TENSOR_ELEMENTS) before any numpy
-    allocation, as defense in depth alongside the overall transport-size cap.
 """
 
 from __future__ import annotations
@@ -47,21 +46,6 @@ from gen.messages_pb2 import (
 )
 
 ort.disable_telemetry_events()
-
-# The Axiom node transport caps a single message around ~4 MiB; capping the
-# model itself at 3 MiB leaves headroom for the rest of the request/response
-# envelope (input tensors, or an inspection result) within that limit.
-MAX_MODEL_BYTES = 3 * 1024 * 1024  # 3 MiB
-
-# Defense in depth: bounds a single tensor's element count independently of
-# the overall transport cap, so a pathological shape (e.g. many small dims
-# multiplying to something huge) fails fast with a clear error instead of
-# attempting a giant allocation.
-MAX_TENSOR_ELEMENTS = 5_000_000
-
-MAX_LISTED_INITIALIZERS = 500
-DEFAULT_MAX_GRAPH_NODES = 200
-HARD_MAX_GRAPH_NODES = 2000
 
 # Running any op outside these domains would require a custom-op library
 # this package never registers — see the module docstring.
@@ -134,21 +118,15 @@ def internal_error() -> Error:
 # ---------------------------------------------------------------------------
 
 
-def check_model_size(model_data: bytes) -> None:
+def check_model_present(model_data: bytes) -> None:
     if not model_data:
         raise OnnxToolsError("MALFORMED_MODEL", "model_data is empty")
-    if len(model_data) > MAX_MODEL_BYTES:
-        raise OnnxToolsError(
-            "MODEL_TOO_LARGE",
-            f"model is {len(model_data)} bytes, exceeds the {MAX_MODEL_BYTES}-byte "
-            "(3 MiB) cap for this package",
-        )
 
 
 def parse_model(model_data: bytes) -> onnx.ModelProto:
-    """bytes -> onnx.ModelProto. Enforces the size cap first, then raises
+    """bytes -> onnx.ModelProto. Requires non-empty input, then raises
     OnnxToolsError(MALFORMED_MODEL) on any parse failure."""
-    check_model_size(model_data)
+    check_model_present(model_data)
     try:
         return onnx.load_from_string(model_data)
     except Exception as exc:  # onnx raises assorted exception types on bad bytes
@@ -297,11 +275,6 @@ def tensor_to_numpy(t: Tensor) -> np.ndarray:
         if d < 0:
             raise OnnxToolsError("INVALID_INPUT", f'tensor "{name}": shape dims must be non-negative')
         n_expected *= d
-    if n_expected > MAX_TENSOR_ELEMENTS:
-        raise OnnxToolsError(
-            "INVALID_INPUT",
-            f'tensor "{name}": {n_expected} elements exceeds the {MAX_TENSOR_ELEMENTS}-element cap',
-        )
 
     if dtype in _FLOAT_DTYPES:
         raw = list(t.float_data)

@@ -8,7 +8,6 @@ def test_mlp_model_initializers_match_known_shapes():
     result = list_initializers(ax(), OnnxModel(model_data=build_tiny_mlp_model()))
     assert_ok(result)
     assert result.total_initializer_count == 2
-    assert not result.truncated
     # W is (2,3)=6 elements, B is (2,)=2 elements -> 8 total parameters.
     assert result.total_parameters == 8
     by_name = {i.name: i for i in result.initializers}

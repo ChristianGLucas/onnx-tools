@@ -31,8 +31,7 @@ def test_garbage_bytes_is_reported_invalid_not_crashed():
     assert not result.error.code
 
 
-def test_oversized_model_is_own_processing_error_not_valid_field():
-    huge = b"\x00" * (3 * 1024 * 1024 + 1)
-    result = validate_model(ax(), OnnxModel(model_data=huge))
-    assert_error(result, "MODEL_TOO_LARGE")
+def test_empty_model_is_own_processing_error_not_valid_field():
+    result = validate_model(ax(), OnnxModel(model_data=b""))
+    assert_error(result, "MALFORMED_MODEL")
     assert result.valid is False  # default/unset, not a meaningful claim here
