@@ -1,7 +1,7 @@
 # onnx-tools
 
 Deterministic ONNX model inspection and inference for the
-[Axiom](https://axiom.dev) marketplace, published as
+[Axiom](https://axiomide.com) marketplace, published as
 `christiangeorgelucas/onnx-tools`.
 
 Run a caller-supplied ONNX model (base64) on caller-supplied input tensors
